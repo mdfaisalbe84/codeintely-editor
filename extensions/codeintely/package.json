@@ -1,0 +1,85 @@
+{
+  "name": "codeintely",
+  "displayName": "CodeIntely",
+  "description": "Ask, explain, edit, fix, test, and secure your code with CodeIntely's coding agent — built into the editor.",
+  "version": "0.1.0",
+  "publisher": "codeintely",
+  "license": "MIT",
+  "engines": {
+    "vscode": "0.10.x"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false }
+  },
+  "contributes": {
+    "commands": [
+      { "command": "codeintely.authorize", "title": "CodeIntely: Sign In" },
+      { "command": "codeintely.ask", "title": "CodeIntely: Ask" },
+      { "command": "codeintely.explain", "title": "CodeIntely: Explain Selection" },
+      { "command": "codeintely.edit", "title": "CodeIntely: Edit Selection" },
+      { "command": "codeintely.agentRemote", "title": "CodeIntely: Agent (Open PR)" },
+      { "command": "codeintely.agentLocal", "title": "CodeIntely: Agent (Apply Locally)" },
+      { "command": "codeintely.openAgentChat", "title": "CodeIntely: Open Agent Chat", "icon": "$(comment-discussion)" },
+      { "command": "codeintely.fix", "title": "CodeIntely: Fix Finding" },
+      { "command": "codeintely.test", "title": "CodeIntely: Generate Test for Finding" },
+      { "command": "codeintely.secure", "title": "CodeIntely: Scan Current File" },
+      { "command": "codeintely.refresh", "title": "CodeIntely: Refresh Sidebar", "icon": "$(refresh)" },
+      { "command": "codeintely.openBilling", "title": "CodeIntely: View Plans / Billing" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "codeintely.explain", "when": "editorHasSelection", "group": "codeintely" },
+        { "command": "codeintely.edit", "when": "editorHasSelection", "group": "codeintely" }
+      ],
+      "view/title": [
+        { "command": "codeintely.refresh", "when": "view == codeintelySecurity || view == codeintelyAgent", "group": "navigation" },
+        { "command": "codeintely.openAgentChat", "when": "view == codeintelyAgent", "group": "navigation" }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "codeintely", "title": "CodeIntely", "icon": "resources/icon.svg" }
+      ]
+    },
+    "views": {
+      "codeintely": [
+        { "id": "codeintelySecurity", "name": "Security" },
+        { "id": "codeintelyAgent", "name": "Agent" }
+      ]
+    },
+    "configuration": {
+      "title": "CodeIntely",
+      "properties": {
+        "codeintely.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "CodeIntely backend base URL."
+        },
+        "codeintely.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run CodeIntely's security scan on every file save (debounced) when signed in. Never triggers sign-in on its own."
+        },
+        "codeintely.dashboardUrl": {
+          "type": "string",
+          "default": "http://localhost:5173",
+          "description": "CodeIntely web dashboard base URL (used for the billing/upgrade link)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:codeintely",
+    "watch": "gulp watch-extension:codeintely"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  }
+}
