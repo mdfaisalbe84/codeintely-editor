@@ -49,14 +49,40 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("codeintely.fix", () => fixCommand(secrets, proposedContentProvider)),
     vscode.commands.registerCommand("codeintely.test", () => testCommand(secrets)),
     vscode.commands.registerCommand("codeintely.secure", () => secureCommand(secrets, diagnostics)),
-    vscode.commands.registerCommand("codeintely.openAgentChat", async (sessionId?: number) => {
+    vscode.commands.registerCommand("codeintely.openAgentChat", async (sessionId?: unknown) => {
       if (!(await requireAgentLicense())) return;
-      if (sessionId === undefined) await AgentChatPanel.openNew(secrets);
-      else await AgentChatPanel.openExisting(secrets, sessionId);
+      // Tree items (sidebar.ts) pass a real number as sessionId. Anything
+      // else — undefined, or the context object VS Code passes when this
+      // is invoked from the Agent panel's title-bar icon instead of a tree
+      // item — means "no specific session", i.e. start a new one.
+      // Confirmed live: `sessionId === undefined` alone let a title-bar
+      // click fall through to openExisting() with a stray object, which
+      // then failed with "couldn't open session #[object Object]".
+      if (typeof sessionId === "number") await AgentChatPanel.openExisting(secrets, sessionId);
+      else await AgentChatPanel.openNew(secrets);
     }),
     vscode.commands.registerCommand("codeintely.refresh", () => {
       securityProvider.refresh();
       agentProvider.refresh();
+    }),
+    // Clicking a Security panel finding — sidebar.ts previously built these
+    // tree items with no `command` at all, so clicking one silently did
+    // nothing (confirmed live: no error, just inert). Opens the file at
+    // the finding's line, same location-resolution logic secure.ts already
+    // uses for diagnostics (clamp to a valid line, 1-based -> 0-based).
+    vscode.commands.registerCommand("codeintely.openFinding", async (filePath: string, lineNumber: number | null) => {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (!folder) return;
+      try {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, filePath));
+        const editor = await vscode.window.showTextDocument(document);
+        const line = Math.max((lineNumber ?? 1) - 1, 0);
+        const range = document.lineAt(Math.min(line, document.lineCount - 1)).range;
+        editor.selection = new vscode.Selection(range.start, range.start);
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+      } catch (err) {
+        vscode.window.showErrorMessage(`CodeIntely: could not open ${filePath} (${(err as Error).message}).`);
+      }
     }),
 
     vscode.workspace.onDidSaveTextDocument((document) => scanOnSave(document, secrets, diagnostics)),

@@ -42,7 +42,15 @@ export class SecurityPanelProvider extends CodeIntelyTreeBase {
     const findings = await api.listFindings(token);
     const open = findings.filter((f: any) => f.status === "OPEN");
     if (open.length === 0) return [new TreeItem("No open findings.")];
-    return open.slice(0, 50).map((f: any) => new TreeItem(`${f.severity} · ${f.rule_id} — ${f.file_path}:${f.line_number ?? "?"}`));
+    return open
+      .slice(0, 50)
+      .map(
+        (f: any) =>
+          new TreeItem(`${f.severity} · ${f.rule_id} — ${f.file_path}:${f.line_number ?? "?"}`, "codeintely.openFinding", [
+            f.file_path,
+            f.line_number,
+          ]),
+      );
   }
 }
 
