@@ -23,7 +23,11 @@ const commit = getVersion(repoPath);
 const buildPath = (arch: string) => path.join(path.dirname(repoPath), `VSCode-win32-${arch}`);
 const setupDir = (arch: string, target: string) => path.join(repoPath, '.build', `win32-${arch}`, `${target}-setup`);
 const innoSetupPath = path.join(path.dirname(path.dirname(require.resolve('innosetup'))), 'bin', 'ISCC.exe');
-const signWin32Path = path.join(repoPath, 'build', 'azure-pipelines', 'common', 'sign-win32.ts');
+// CodeIntely fork: azure-pipelines/common/sign-win32.ts is Microsoft's internal ESRP
+// pipeline, unusable outside Microsoft's own Azure DevOps org (confirmed live) — this signs
+// the installer via Azure Trusted Signing instead. See build/codeintely/sign-trusted-signing.ts
+// for the required env vars.
+const signWin32Path = path.join(repoPath, 'build', 'codeintely', 'sign-trusted-signing.ts');
 
 function packageInnoSetup(iss: string, options: { definitions?: Record<string, unknown> }, cb: (err?: Error | null) => void) {
 	const definitions = options.definitions || {};
