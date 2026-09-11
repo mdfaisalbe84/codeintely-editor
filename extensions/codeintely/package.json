@@ -40,7 +40,7 @@
       ]
     },
     "viewsContainers": {
-      "activitybar": [
+      "panel": [
         { "id": "codeintely", "title": "CodeIntely", "icon": "resources/icon.svg" }
       ]
     },
