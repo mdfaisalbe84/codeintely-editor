@@ -9,7 +9,7 @@
     "vscode": "0.10.x"
   },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": ["onStartupFinished", "onChatParticipant:codeintely.chat"],
   "main": "./out/extension.js",
   "capabilities": {
     "untrustedWorkspaces": { "supported": false }
@@ -39,6 +39,16 @@
         { "command": "codeintely.openAgentChat", "when": "view == codeintelyAgent", "group": "navigation" }
       ]
     },
+    "chatParticipants": [
+      {
+        "id": "codeintely.chat",
+        "name": "codeintely",
+        "fullName": "CodeIntely",
+        "description": "Ask CodeIntely's coding agent to plan, code, test, and secure your repo.",
+        "isSticky": true,
+        "sampleRequest": "Scan this repository for security issues"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         { "id": "codeintely", "title": "CodeIntely", "icon": "resources/icon.svg" }

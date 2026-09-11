@@ -10,6 +10,7 @@ import { secureCommand, scanOnSave } from "./commands/secure";
 import { ProposedContentProvider } from "./diffProvider";
 import { SecurityPanelProvider, AgentPanelProvider } from "./sidebar";
 import { AgentChatPanel } from "./agentChatPanel";
+import { registerChatParticipant } from "./chatParticipant";
 import { initLicenseStatusBar, refreshLicenseNow, requireAgentLicense } from "./license";
 
 /**
@@ -86,6 +87,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.workspace.onDidSaveTextDocument((document) => scanOnSave(document, secrets, diagnostics)),
+    registerChatParticipant(secrets, context.extensionUri),
   );
 
   initLicenseStatusBar(context, secrets);
