@@ -64,10 +64,20 @@ export class AgentPanelProvider extends CodeIntelyTreeBase {
 
     const sessionItems = sessions
       .slice(0, 10)
-      .map((s: any) => new TreeItem(`Chat #${s.id} [${s.status}] ${s.repository}`, "codeintely.openAgentChat", [s.id]));
+      .map(
+        (s: any) =>
+          new TreeItem(`Chat #${s.id} [${s.status}] ${s.created_by ?? "unknown"} — ${s.repository}`, "codeintely.openAgentChat", [s.id]),
+      );
 
     const taskItems = tasks.length
-      ? tasks.slice(0, 20).map((t: any) => new TreeItem(`#${t.id} [${t.status}] ${t.description.slice(0, 60)}`))
+      ? tasks
+          .slice(0, 20)
+          .map(
+            (t: any) =>
+              new TreeItem(`#${t.id} [${t.status}] ${t.created_by ?? "unknown"} — ${t.description.slice(0, 60)}`, "codeintely.showTaskInfo", [
+                t,
+              ]),
+          )
       : [new TreeItem("No single-shot agent tasks yet — run \"CodeIntely: Agent\" to start one.")];
 
     return [newChat, ...sessionItems, ...taskItems];

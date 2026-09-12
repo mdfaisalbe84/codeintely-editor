@@ -85,6 +85,18 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand("codeintely.showTaskInfo", async (task: any) => {
+      const parts = [`Status: ${task.status}`];
+      if (task.last_error) parts.push(`Error: ${task.last_error}`);
+      const message = `Task #${task.id} — ${task.description}\n${parts.join(" · ")}`;
+      if (task.pr_url) {
+        const choice = await vscode.window.showInformationMessage(message, "Open PR");
+        if (choice === "Open PR") await vscode.env.openExternal(vscode.Uri.parse(task.pr_url));
+      } else {
+        void vscode.window.showInformationMessage(message);
+      }
+    }),
+
     vscode.workspace.onDidSaveTextDocument((document) => scanOnSave(document, secrets, diagnostics)),
   );
 
