@@ -103,6 +103,22 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   initLicenseStatusBar(context, secrets);
+
+  // First-ever activation on this profile: force the Chat view open so a
+  // new user actually sees it without needing to know to press Ctrl+J —
+  // extensions can only declare "panel" or "activitybar" as a default
+  // location (confirmed against VS Code's own viewsExtensionPoint.ts;
+  // "auxiliarybar", where Claude Code/Codex/the built-in Chat often end
+  // up, is only reachable via VS Code core's internal registration, not
+  // the public contribution point), and where "panel" actually renders
+  // depends on the viewer's own layout, so this reveal is the only
+  // reliable way to guarantee visibility on a fresh install. Relies on
+  // globalState actually persisting across restarts, which requires a
+  // working @vscode/sqlite3 native binary for this Electron build.
+  if (!context.globalState.get<boolean>("codeintely.hasShownChatOnce", false)) {
+    void context.globalState.update("codeintely.hasShownChatOnce", true);
+    void vscode.commands.executeCommand("codeintelyChat.focus");
+  }
 }
 
 export function deactivate() {}
