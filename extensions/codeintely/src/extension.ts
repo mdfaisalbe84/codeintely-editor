@@ -36,8 +36,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider(AgentChatViewProvider.viewType, chatViewProvider),
 
     vscode.commands.registerCommand("codeintely.authorize", async () => {
-      await authorize(secrets);
+      const token = await authorize(secrets);
       await refreshLicenseNow(secrets);
+      // Sign-in triggered from the status bar item only stores the token —
+      // it doesn't otherwise reach the Security/Agent tree views or the
+      // Chat webview, which only recheck auth state when told to. Without
+      // this, those panels kept showing "Sign in to CodeIntely..." even
+      // after a successful sign-in until the user manually hit refresh or
+      // reloaded the window.
+      if (token) {
+        securityProvider.refresh();
+        agentProvider.refresh();
+        await chatViewProvider.refreshAuthState();
+      }
     }),
     vscode.commands.registerCommand("codeintely.ask", () => askCommand(secrets)),
     vscode.commands.registerCommand("codeintely.explain", () => explainCommand(secrets)),

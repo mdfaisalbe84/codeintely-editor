@@ -66,6 +66,17 @@ export class AgentChatViewProvider implements vscode.WebviewViewProvider {
     await this.loadSession(sessionId);
   }
 
+  /**
+   * Called after a sign-in triggered from *outside* this view (the status
+   * bar "CodeIntely: Sign In" item) so the webview leaves its "signedOut"
+   * screen without needing a manual reload. Only re-renders the list when
+   * we're not already inside an active session — signing in again while a
+   * session is open should not reset it.
+   */
+  async refreshAuthState(): Promise<void> {
+    if (this.currentSessionId === undefined) await this.showSessionList();
+  }
+
   private post(msg: unknown): void {
     if (this.disposed || !this.view) return;
     void this.view.webview.postMessage(msg);
