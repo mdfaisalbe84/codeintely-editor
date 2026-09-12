@@ -104,26 +104,21 @@ export function activate(context: vscode.ExtensionContext) {
 
   initLicenseStatusBar(context, secrets);
 
-  // First-ever activation on this profile: extensions can only declare
-  // "panel" or "activitybar" as a views-container location (confirmed
-  // against VS Code's own viewsExtensionPoint.ts) — "auxiliarybar", where
-  // Claude Code/Codex/the built-in Chat visibly end up, is only reachable
-  // via VS Code core's internal registration, not the public contribution
-  // point. Rather than leave where "panel" renders up to whatever the
-  // user's layout happens to default to, set it explicitly to "right"
-  // ourselves (the same setting a user would set by hand to get that exact
-  // layout — confirmed this is the actual mechanism, not a container
-  // property), then reveal the Chat view. A user can always move it
-  // afterward; this only decides the *first* impression. Relies on
-  // globalState/settings actually persisting across restarts, which
-  // requires a working @vscode/sqlite3 native binary for this Electron
-  // build.
+  // First-ever activation on this profile: the "codeintely" container is
+  // now declared under viewsContainers.secondarySidebar (package.json) —
+  // a real, public VS Code contribution point (confirmed against
+  // viewsExtensionPoint.ts: 'secondarySidebar' -> ViewContainerLocation.AuxiliaryBar)
+  // that places it in the right-side Secondary Side Bar directly,
+  // affecting only this container — unlike the earlier, wrong approach of
+  // setting workbench.panel.defaultLocation globally, which would have
+  // also moved Terminal/Output/Problems. This reveal just ensures it's
+  // actually opened/focused the first time, since a fresh Secondary Side
+  // Bar can start collapsed. Relies on globalState persisting across
+  // restarts, which requires a working @vscode/sqlite3 native binary for
+  // this Electron build.
   if (!context.globalState.get<boolean>("codeintely.hasShownChatOnce", false)) {
     void context.globalState.update("codeintely.hasShownChatOnce", true);
-    void vscode.workspace
-      .getConfiguration()
-      .update("workbench.panel.defaultLocation", "right", vscode.ConfigurationTarget.Global)
-      .then(() => vscode.commands.executeCommand("codeintelyChat.focus"));
+    void vscode.commands.executeCommand("codeintelyChat.focus");
   }
 }
 
