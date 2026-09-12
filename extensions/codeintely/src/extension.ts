@@ -9,7 +9,7 @@ import { testCommand } from "./commands/test";
 import { secureCommand, scanOnSave } from "./commands/secure";
 import { ProposedContentProvider } from "./diffProvider";
 import { SecurityPanelProvider, AgentPanelProvider } from "./sidebar";
-import { AgentChatPanel } from "./agentChatPanel";
+import { AgentChatViewProvider } from "./agentChatView";
 import { initLicenseStatusBar, refreshLicenseNow, requireAgentLicense } from "./license";
 
 /**
@@ -26,12 +26,14 @@ export function activate(context: vscode.ExtensionContext) {
   const diagnostics = vscode.languages.createDiagnosticCollection("codeintely");
   const securityProvider = new SecurityPanelProvider(secrets);
   const agentProvider = new AgentPanelProvider(secrets);
+  const chatViewProvider = new AgentChatViewProvider(secrets);
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(ProposedContentProvider.SCHEME, proposedContentProvider),
     diagnostics,
     vscode.window.registerTreeDataProvider("codeintelySecurity", securityProvider),
     vscode.window.registerTreeDataProvider("codeintelyAgent", agentProvider),
+    vscode.window.registerWebviewViewProvider(AgentChatViewProvider.viewType, chatViewProvider),
 
     vscode.commands.registerCommand("codeintely.authorize", async () => {
       await authorize(secrets);
@@ -58,8 +60,8 @@ export function activate(context: vscode.ExtensionContext) {
       // Confirmed live: `sessionId === undefined` alone let a title-bar
       // click fall through to openExisting() with a stray object, which
       // then failed with "couldn't open session #[object Object]".
-      if (typeof sessionId === "number") await AgentChatPanel.openExisting(secrets, sessionId);
-      else await AgentChatPanel.openNew(secrets);
+      if (typeof sessionId === "number") await chatViewProvider.openExistingFromOutside(sessionId);
+      else await chatViewProvider.startNewFromOutside();
     }),
     vscode.commands.registerCommand("codeintely.refresh", () => {
       securityProvider.refresh();

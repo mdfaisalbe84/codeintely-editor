@@ -36,7 +36,7 @@
       ],
       "view/title": [
         { "command": "codeintely.refresh", "when": "view == codeintelySecurity || view == codeintelyAgent", "group": "navigation" },
-        { "command": "codeintely.openAgentChat", "when": "view == codeintelyAgent", "group": "navigation" }
+        { "command": "codeintely.openAgentChat", "when": "view == codeintelyChat || view == codeintelyAgent", "group": "navigation" }
       ]
     },
     "viewsContainers": {
@@ -46,6 +46,7 @@
     },
     "views": {
       "codeintely": [
+        { "id": "codeintelyChat", "name": "Chat", "type": "webview" },
         { "id": "codeintelySecurity", "name": "Security" },
         { "id": "codeintelyAgent", "name": "Agent" }
       ]

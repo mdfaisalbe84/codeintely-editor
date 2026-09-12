@@ -1,15 +1,20 @@
 import * as vscode from "vscode";
 import { api, currentRepositoryFullName } from "./api";
-import { ensureAuthorized } from "./auth";
+import { ensureAuthorized, getStoredToken } from "./auth";
 
 /**
- * Part II Phase 29 — the Agent panel's chat UI, reimplemented as a native
- * editor panel (a real `WebviewPanel`, not a webview iframe of the React
- * dashboard) against the exact same Phase 27 REST endpoints `AgentChat.tsx`
- * already calls. Two things this phase's editor-native surface adds over
- * Phase 27's web version: a real `@`-mention autocomplete popup (Phase 27
- * shipped only a plain-text hint) and inline plan approval/editing with no
- * "open the dashboard" round-trip — both built here, no new backend calls.
+ * Docked chat, built as a real vscode.WebviewView (not agentChatPanel.ts's
+ * WebviewPanel) so it lives *inside* the panel area alongside other AI-tool
+ * tabs (Claude Code, Codex, etc.) instead of opening as a separate
+ * main-editor-area tab — confirmed live tonight that a WebviewPanel is the
+ * wrong primitive for "docked like Claude Code's own chat," and that the
+ * same WebviewView approach built for the standalone vscode-extension
+ * project works correctly. Supersedes agentChatPanel.ts entirely.
+ *
+ * A WebviewView is a single persistent surface, not one-tab-per-session —
+ * so this adds a session-list screen inside the same view, with "New
+ * Chat"/back navigation between the list and an active session, rather
+ * than multiple simultaneous panels.
  */
 
 const MENTION_KINDS: { insert: string; detail: string; dynamic?: "file" | "folder" }[] = [
@@ -23,31 +28,67 @@ const MENTION_KINDS: { insert: string; detail: string; dynamic?: "file" | "folde
 
 const POLL_MS = 3000;
 
-/**
- * `session.status` flips to "awaiting_approval" the instant a `CodingTask`
- * is created (`agent/session_chat.py`) — well before plan generation (a
- * separate, async `run_coding_task_async` Celery job) actually finishes.
- * Found live: polling only on `status === "running"` meant a completed
- * plan never appeared in the panel — the state landed server-side but
- * nothing fetched it. Also keep polling once approved, until the run
- * reaches a real terminal `session.plan_status` ("draft" means still
- * mid-generation, not yet reviewable).
- */
 function needsPolling(session: any): boolean {
   if (session.status === "running") return true;
   if (session.status === "awaiting_approval" && session.plan_status !== "draft") return true;
   return false;
 }
 
-export class AgentChatPanel {
-  private static panels = new Map<number, AgentChatPanel>();
+export class AgentChatViewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = "codeintelyChat";
 
-  private readonly panel: vscode.WebviewPanel;
+  private view?: vscode.WebviewView;
+  private currentSessionId?: number;
   private pollTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
 
-  static async openNew(secrets: vscode.SecretStorage): Promise<void> {
-    const token = await ensureAuthorized(secrets);
+  constructor(private secrets: vscode.SecretStorage) {}
+
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
+    webviewView.webview.html = this.renderHtml();
+    webviewView.webview.onDidReceiveMessage((msg) => void this.onMessage(msg));
+    webviewView.onDidDispose(() => {
+      this.disposed = true;
+      if (this.pollTimer) clearTimeout(this.pollTimer);
+    });
+    void this.showSessionList();
+  }
+
+  async startNewFromOutside(): Promise<void> {
+    if (this.view) this.view.show?.(true);
+    await this.createNew();
+  }
+
+  async openExistingFromOutside(sessionId: number): Promise<void> {
+    if (this.view) this.view.show?.(true);
+    await this.loadSession(sessionId);
+  }
+
+  private post(msg: unknown): void {
+    if (this.disposed || !this.view) return;
+    void this.view.webview.postMessage(msg);
+  }
+
+  private async showSessionList(): Promise<void> {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.currentSessionId = undefined;
+    const token = await getStoredToken(this.secrets);
+    if (!token) {
+      this.post({ type: "signedOut" });
+      return;
+    }
+    try {
+      const sessions = await api.listAgentSessions(token);
+      this.post({ type: "sessionList", sessions });
+    } catch (err) {
+      this.post({ type: "error", message: (err as Error).message });
+    }
+  }
+
+  private async createNew(): Promise<void> {
+    const token = await ensureAuthorized(this.secrets);
     if (!token) return;
     const repoFullName = await currentRepositoryFullName();
     if (!repoFullName) {
@@ -61,71 +102,53 @@ export class AgentChatPanel {
     }
     try {
       const session = await api.createAgentSession(token, repoId);
-      new AgentChatPanel(secrets, session);
+      this.currentSessionId = session.id;
+      this.post({ type: "state", session });
+      if (needsPolling(session)) this.schedulePoll();
     } catch (err) {
       vscode.window.showErrorMessage(`CodeIntely: couldn't start a chat session — ${(err as Error).message}`);
     }
   }
 
-  static async openExisting(secrets: vscode.SecretStorage, sessionId: number): Promise<void> {
-    const existing = AgentChatPanel.panels.get(sessionId);
-    if (existing) {
-      existing.panel.reveal();
-      return;
-    }
-    const token = await ensureAuthorized(secrets);
+  private async loadSession(sessionId: number): Promise<void> {
+    const token = await ensureAuthorized(this.secrets);
     if (!token) return;
     try {
       const session = await api.getAgentSession(token, sessionId);
-      new AgentChatPanel(secrets, session);
+      this.currentSessionId = sessionId;
+      this.post({ type: "state", session });
+      if (needsPolling(session)) this.schedulePoll();
     } catch (err) {
       vscode.window.showErrorMessage(`CodeIntely: couldn't open session #${sessionId} — ${(err as Error).message}`);
     }
   }
 
-  private constructor(private secrets: vscode.SecretStorage, session: any) {
-    this.panel = vscode.window.createWebviewPanel(
-      "codeintelyAgentChat",
-      `CodeIntely Agent — ${session.repository} #${session.id}`,
-      vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true },
-    );
-    AgentChatPanel.panels.set(session.id, this);
-
-    this.panel.webview.html = this.renderHtml();
-    this.panel.webview.onDidReceiveMessage((msg) => void this.onMessage(session.id, msg));
-    this.panel.onDidDispose(() => {
-      this.disposed = true;
-      if (this.pollTimer) clearTimeout(this.pollTimer);
-      AgentChatPanel.panels.delete(session.id);
-    });
-
-    this.pushState(session);
-    if (needsPolling(session)) this.schedulePoll(session.id);
-  }
-
-  private pushState(session: any): void {
+  private schedulePoll(): void {
     if (this.disposed) return;
-    void this.panel.webview.postMessage({ type: "state", session });
-  }
-
-  private schedulePoll(sessionId: number): void {
-    if (this.disposed) return;
+    const sessionId = this.currentSessionId;
     this.pollTimer = setTimeout(async () => {
-      if (this.disposed) return;
+      if (this.disposed || this.currentSessionId !== sessionId) return;
       const token = await ensureAuthorized(this.secrets);
       if (!token) return;
       try {
-        const session = await api.getAgentSession(token, sessionId);
-        this.pushState(session);
-        if (needsPolling(session)) this.schedulePoll(sessionId);
+        const session = await api.getAgentSession(token, sessionId!);
+        this.post({ type: "state", session });
+        if (needsPolling(session)) this.schedulePoll();
       } catch {
-        this.schedulePoll(sessionId); // transient network hiccup — keep polling, don't give up silently
+        this.schedulePoll();
       }
     }, POLL_MS);
   }
 
-  private async onMessage(sessionId: number, msg: any): Promise<void> {
+  private async onMessage(msg: any): Promise<void> {
+    if (msg.type === "refreshList") return this.showSessionList();
+    if (msg.type === "newSession") return this.createNew();
+    if (msg.type === "selectSession") return this.loadSession(msg.id);
+    if (msg.type === "back") return this.showSessionList();
+    if (msg.type === "authorize") return void vscode.commands.executeCommand("codeintely.authorize").then(() => this.showSessionList());
+
+    const sessionId = this.currentSessionId;
+    if (sessionId === undefined) return;
     const token = await ensureAuthorized(this.secrets);
     if (!token) return;
 
@@ -133,45 +156,41 @@ export class AgentChatPanel {
       switch (msg.type) {
         case "send": {
           const session = await api.postSessionMessage(token, sessionId, msg.content);
-          this.pushState(session);
-          if (needsPolling(session)) this.schedulePoll(sessionId);
+          this.post({ type: "state", session });
+          if (needsPolling(session)) this.schedulePoll();
           break;
         }
-        case "addStep": {
+        case "addStep":
           await api.addPlanStep(token, sessionId, msg.description, msg.targetFiles ?? []);
-          this.pushState(await api.getAgentSession(token, sessionId));
+          this.post({ type: "state", session: await api.getAgentSession(token, sessionId) });
           break;
-        }
-        case "editStep": {
+        case "editStep":
           await api.editPlanStep(token, sessionId, msg.stepId, { description: msg.description });
-          this.pushState(await api.getAgentSession(token, sessionId));
+          this.post({ type: "state", session: await api.getAgentSession(token, sessionId) });
           break;
-        }
-        case "deleteStep": {
+        case "deleteStep":
           await api.deletePlanStep(token, sessionId, msg.stepId);
-          this.pushState(await api.getAgentSession(token, sessionId));
+          this.post({ type: "state", session: await api.getAgentSession(token, sessionId) });
           break;
-        }
         case "approve": {
           const session = await api.approveSession(token, sessionId);
-          this.pushState(session);
-          if (needsPolling(session)) this.schedulePoll(sessionId);
+          this.post({ type: "state", session });
+          if (needsPolling(session)) this.schedulePoll();
           break;
         }
         case "listFiles": {
           const pattern = `**/*${msg.query ?? ""}*`;
           const uris = await vscode.workspace.findFiles(pattern, "**/node_modules/**", 30);
           const paths = uris.map((u) => vscode.workspace.asRelativePath(u));
-          void this.panel.webview.postMessage({ type: "filesResult", requestId: msg.requestId, files: paths });
+          this.post({ type: "filesResult", requestId: msg.requestId, files: paths });
           break;
         }
-        case "openPr": {
+        case "openPr":
           if (msg.url) await vscode.env.openExternal(vscode.Uri.parse(msg.url));
           break;
-        }
       }
     } catch (err) {
-      void this.panel.webview.postMessage({ type: "error", message: (err as Error).message });
+      this.post({ type: "error", message: (err as Error).message });
     }
   }
 
@@ -184,6 +203,12 @@ export class AgentChatPanel {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 0; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+  #sessionList { padding: 8px; overflow-y: auto; }
+  #sessionList .row { padding: 6px 8px; cursor: pointer; border-radius: 3px; }
+  #sessionList .row:hover { background: var(--vscode-list-hoverBackground); }
+  #sessionList button { width: 100%; margin-bottom: 8px; }
+  #chat { display: none; flex-direction: column; height: 100%; }
+  #backRow { padding: 6px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
   #messages { flex: 1; overflow-y: auto; padding: 12px; }
   .msg { margin-bottom: 12px; white-space: pre-wrap; }
   .msg .role { font-weight: 600; opacity: 0.75; margin-right: 6px; }
@@ -206,18 +231,28 @@ export class AgentChatPanel {
 </style>
 </head>
 <body>
-  <div id="messages"></div>
-  <div id="plan" style="display:none"></div>
-  <div id="status"></div>
-  <div id="inputRow">
-    <div id="mentionPopup"></div>
-    <textarea id="inputBox" placeholder="Describe what CodeIntely's agent should do. Type @ to reference @repo, @file:, @folder:, @errors, @github#…"></textarea>
-    <button id="sendBtn">Send</button>
+  <div id="sessionList">
+    <button id="newChatBtn">+ New Agent Chat Session…</button>
+    <div id="sessionRows"></div>
+  </div>
+  <div id="chat">
+    <div id="backRow"><button class="secondary" id="backBtn">&larr; Sessions</button></div>
+    <div id="messages"></div>
+    <div id="plan" style="display:none"></div>
+    <div id="status"></div>
+    <div id="inputRow">
+      <div id="mentionPopup"></div>
+      <textarea id="inputBox" placeholder="Describe what CodeIntely's agent should do. Type @ to reference @repo, @file:, @folder:, @errors, @github#…"></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
   </div>
 <script nonce="${nonce}">
 (function() {
   const vscodeApi = acquireVsCodeApi();
   const MENTION_KINDS = ${mentionData};
+  const sessionListEl = document.getElementById('sessionList');
+  const sessionRowsEl = document.getElementById('sessionRows');
+  const chatEl = document.getElementById('chat');
   const messagesEl = document.getElementById('messages');
   const planEl = document.getElementById('plan');
   const statusEl = document.getElementById('status');
@@ -226,11 +261,46 @@ export class AgentChatPanel {
   const popup = document.getElementById('mentionPopup');
 
   let session = null;
-  let mentionState = null; // { start, query, activeIndex, candidates }
+  let mentionState = null;
   let fileListRequestSeq = 0;
+
+  document.getElementById('newChatBtn').addEventListener('click', () => vscodeApi.postMessage({ type: 'newSession' }));
+  document.getElementById('backBtn').addEventListener('click', () => vscodeApi.postMessage({ type: 'back' }));
+
+  function showList(sessions) {
+    chatEl.style.display = 'none';
+    sessionListEl.style.display = 'block';
+    sessionRowsEl.innerHTML = '';
+    (sessions || []).forEach((s) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.textContent = 'Chat #' + s.id + ' [' + s.status + '] ' + (s.created_by || 'unknown') + ' — ' + s.repository;
+      row.addEventListener('click', () => vscodeApi.postMessage({ type: 'selectSession', id: s.id }));
+      sessionRowsEl.appendChild(row);
+    });
+    if (!sessions || sessions.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.opacity = '0.7';
+      empty.style.padding = '6px 8px';
+      empty.textContent = 'No chat sessions yet.';
+      sessionRowsEl.appendChild(empty);
+    }
+  }
+
+  function showSignedOut() {
+    chatEl.style.display = 'none';
+    sessionListEl.style.display = 'block';
+    sessionRowsEl.innerHTML = '';
+    const btn = document.createElement('button');
+    btn.textContent = 'Sign in to CodeIntely';
+    btn.addEventListener('click', () => vscodeApi.postMessage({ type: 'authorize' }));
+    sessionRowsEl.appendChild(btn);
+  }
 
   function render() {
     if (!session) return;
+    sessionListEl.style.display = 'none';
+    chatEl.style.display = 'flex';
     messagesEl.innerHTML = '';
     for (const m of session.messages || []) {
       const div = document.createElement('div');
@@ -243,14 +313,12 @@ export class AgentChatPanel {
       messagesEl.appendChild(div);
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
-
     renderPlan();
     statusEl.textContent = 'Session status: ' + session.status + (session.task ? (' · task: ' + session.task.status) : '');
   }
 
   function renderPlan() {
     const task = session.task;
-    const plan = task && task.steps ? task : null;
     if (!task || !task.steps || task.steps.length === 0) {
       planEl.style.display = 'none';
       planEl.innerHTML = '';
@@ -275,9 +343,7 @@ export class AgentChatPanel {
         const input = document.createElement('input');
         input.type = 'text';
         input.value = step.description;
-        input.addEventListener('change', () => {
-          vscodeApi.postMessage({ type: 'editStep', stepId: step.id, description: input.value });
-        });
+        input.addEventListener('change', () => vscodeApi.postMessage({ type: 'editStep', stepId: step.id, description: input.value }));
         row.appendChild(input);
         const del = document.createElement('button');
         del.className = 'secondary';
@@ -303,7 +369,6 @@ export class AgentChatPanel {
         if (description) vscodeApi.postMessage({ type: 'addStep', description, targetFiles: [] });
       });
       approveRow.appendChild(addBtn);
-
       const approveBtn = document.createElement('button');
       approveBtn.textContent = 'Approve & Run';
       approveBtn.addEventListener('click', () => vscodeApi.postMessage({ type: 'approve' }));
@@ -328,7 +393,7 @@ export class AgentChatPanel {
     const at = uptoCaret.lastIndexOf('@');
     if (at === -1) return null;
     const token = uptoCaret.slice(at + 1);
-    if (/\\s/.test(token)) return null; // '@' no longer part of the token being typed
+    if (/\\s/.test(token)) return null;
     return { start: at, query: token };
   }
 
@@ -366,7 +431,6 @@ export class AgentChatPanel {
   function updateMentionPopup() {
     const found = currentMentionQuery();
     if (!found) { closeMentionPopup(); return; }
-
     const colonIdx = found.query.indexOf(':');
     const hashIdx = found.query.indexOf('#');
     if (colonIdx !== -1) {
@@ -383,8 +447,7 @@ export class AgentChatPanel {
       popup.innerHTML = '<div class="item">searching…</div>';
       return;
     }
-    if (hashIdx !== -1) { closeMentionPopup(); return; } // github#<N> — user types the number directly, nothing to suggest
-
+    if (hashIdx !== -1) { closeMentionPopup(); return; }
     const matches = MENTION_KINDS.filter((k) => k.insert.startsWith(found.query)).map((k) => k.insert);
     if (matches.length === 0) { closeMentionPopup(); return; }
     mentionState = { start: found.start, query: found.query, activeIndex: 0, candidates: matches };
@@ -399,10 +462,7 @@ export class AgentChatPanel {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyMention(mentionState.candidates[mentionState.activeIndex]); return; }
       if (e.key === 'Escape') { closeMentionPopup(); return; }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !mentionState) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key === 'Enter' && !e.shiftKey && !mentionState) { e.preventDefault(); send(); }
   });
 
   function send() {
@@ -416,10 +476,10 @@ export class AgentChatPanel {
 
   window.addEventListener('message', (event) => {
     const msg = event.data;
-    if (msg.type === 'state') {
-      session = msg.session;
-      render();
-    } else if (msg.type === 'filesResult' && mentionState && mentionState.requestId === msg.requestId) {
+    if (msg.type === 'sessionList') { session = null; showList(msg.sessions); }
+    else if (msg.type === 'signedOut') { session = null; showSignedOut(); }
+    else if (msg.type === 'state') { session = msg.session; render(); }
+    else if (msg.type === 'filesResult' && mentionState && mentionState.requestId === msg.requestId) {
       mentionState.candidates = msg.files.map((f) => mentionState.prefix + f);
       mentionState.activeIndex = 0;
       renderMentionPopup(mentionState.candidates);
@@ -427,6 +487,8 @@ export class AgentChatPanel {
       statusEl.textContent = 'Error: ' + msg.message;
     }
   });
+
+  vscodeApi.postMessage({ type: 'refreshList' });
 })();
 </script>
 </body>
