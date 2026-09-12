@@ -56,8 +56,8 @@
       "properties": {
         "codeintely.apiBaseUrl": {
           "type": "string",
-          "default": "http://localhost:8000",
-          "description": "CodeIntely backend base URL."
+          "default": "https://app.codeintely.com",
+          "description": "CodeIntely backend base URL. Override to http://localhost:8000 for local backend development."
         },
         "codeintely.scanOnSave": {
           "type": "boolean",
@@ -66,8 +66,8 @@
         },
         "codeintely.dashboardUrl": {
           "type": "string",
-          "default": "http://localhost:5173",
-          "description": "CodeIntely web dashboard base URL (used for the billing/upgrade link)."
+          "default": "https://app.codeintely.com",
+          "description": "CodeIntely web dashboard base URL (used for the billing/upgrade link). Override to http://localhost:5173 for local frontend development."
         }
       }
     }
